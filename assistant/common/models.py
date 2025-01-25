@@ -93,6 +93,7 @@ class GuildSettings(AssistantBaseModel):
     model: str = "gpt-4o-mini"
     embed_model: str = "text-embedding-3-small"  # Or text-embedding-3-large, text-embedding-ada-002
     collab_convos: bool = False
+    reasoning_effort: str = "low"  # low, medium, high
 
     image_command: bool = True  # Allow image commands
 
@@ -254,7 +255,7 @@ class Conversation(AssistantBaseModel):
 
     def overwrite(self, messages: List[dict]):
         self.refresh()
-        self.messages = [i for i in messages if i["role"] != "system"]
+        self.messages = [i for i in messages if i["role"] not in ["system", "developer"]]
 
     def update_messages(
         self,
@@ -295,7 +296,7 @@ class Conversation(AssistantBaseModel):
         """Pre-appends the prmompts before the user's messages without motifying them"""
         prepared = []
         if system_prompt.strip():
-            prepared.append({"role": "system", "content": system_prompt})
+            prepared.append({"role": "developer", "content": system_prompt})
         if initial_prompt.strip():
             prepared.append({"role": "user", "content": initial_prompt})
         prepared.extend(self.messages)

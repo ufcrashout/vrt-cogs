@@ -15,7 +15,7 @@ from tenacity import (
     wait_random_exponential,
 )
 
-from .constants import NO_SYSTEM_MESSAGES, SUPPORTS_SEED, SUPPORTS_TOOLS
+from .constants import NO_DEVELOPER_ROLE, PRICES, SUPPORTS_SEED, SUPPORTS_TOOLS
 
 log = logging.getLogger("red.vrt.assistant.calls")
 
@@ -43,35 +43,38 @@ async def request_chat_completion_raw(
     presence_penalty: float = 0.0,
     seed: int = None,
     base_url: Optional[str] = None,
+    reasoning_effort: Optional[str] = None,
 ) -> ChatCompletion:
     client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url)
 
     kwargs = {"model": model, "messages": messages}
 
-    if model not in NO_SYSTEM_MESSAGES:
-        kwargs["temperature"] = temperature
-        kwargs["frequency_penalty"] = frequency_penalty
-        kwargs["presence_penalty"] = presence_penalty
+    if model in PRICES and base_url is None:
+        # Using an OpenAI model
+        if "o1" not in model:
+            kwargs["temperature"] = temperature
+            kwargs["frequency_penalty"] = frequency_penalty
+            kwargs["presence_penalty"] = presence_penalty
 
-    if max_tokens > 0:
-        if model in NO_SYSTEM_MESSAGES:
+        if model in ["o1", "o1-2024-12-17"] and reasoning_effort is not None:
+            kwargs["reasoning_effort"] = reasoning_effort
+
+        if max_tokens > 0:
             kwargs["max_completion_tokens"] = max_tokens
-        else:
-            kwargs["max_tokens"] = max_tokens
 
-    if seed and model in SUPPORTS_SEED:
-        kwargs["seed"] = seed
+        if seed and model in SUPPORTS_SEED:
+            kwargs["seed"] = seed
 
-    if functions and model not in NO_SYSTEM_MESSAGES:
-        if model in SUPPORTS_TOOLS:
-            tools = []
-            for func in functions:
-                function = {"type": "function", "function": func, "name": func["name"]}
-                tools.append(function)
-            if tools:
-                kwargs["tools"] = tools
-        else:
-            kwargs["functions"] = functions
+        if functions and model not in NO_DEVELOPER_ROLE:
+            if model in SUPPORTS_TOOLS:
+                tools = []
+                for func in functions:
+                    function = {"type": "function", "function": func, "name": func["name"]}
+                    tools.append(function)
+                if tools:
+                    kwargs["tools"] = tools
+            else:
+                kwargs["functions"] = functions
 
     add_breadcrumb(
         category="api",
