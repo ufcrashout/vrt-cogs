@@ -240,78 +240,94 @@ class Tickets(TicketCommands, Functions, commands.Cog, metaclass=CompositeMetaCl
                 self.view_cache[guild.id].append(logview)
 
     @tasks.loop(minutes=20)
-    async def auto_close(self):
+    
+async def auto_close(self):
+    """Automatically close tickets after inactivity."""
+    try:
         actasks = []
         conf = await self.config.all_guilds()
-        for gid, conf in conf.items():
-            if not conf:
+        log.debug("Starting auto_close process for all guilds.")
+
+        for gid, guild_conf in conf.items():
+            if not guild_conf:
+                log.debug(f"No configuration found for guild ID {gid}. Skipping.")
                 continue
+
             guild = self.bot.get_guild(gid)
             if not guild:
+                log.debug(f"Guild with ID {gid} not found. Skipping.")
                 continue
-            inactive = conf["inactive"]
-            if not inactive:
+
+            inactive_timeout = guild_conf.get("inactive")
+            if not inactive_timeout:
+                log.debug(f"No inactive timeout set for guild {guild.name} (ID: {gid}). Skipping.")
                 continue
-            opened = conf["opened"]
-            if not opened:
+
+            opened_tickets = guild_conf.get("opened", {})
+            if not opened_tickets:
+                log.debug(f"No opened tickets found in guild {guild.name} (ID: {gid}). Skipping.")
                 continue
-            for uid, tickets in opened.items():
+
+            for uid, tickets in opened_tickets.items():
                 member = guild.get_member(int(uid))
                 if not member:
+                    log.debug(f"Member with ID {uid} not found in guild {guild.name}. Skipping.")
                     continue
+
                 for channel_id, ticket in tickets.items():
-                    has_response = ticket.get("has_response")
-                    if has_response and channel_id not in self.valid:
-                        self.valid.append(channel_id)
-                        continue
-                    if channel_id in self.valid:
-                        continue
                     channel = guild.get_channel_or_thread(int(channel_id))
                     if not channel:
-                        continue
-                    now = datetime.datetime.now().astimezone()
-                    opened_on = datetime.datetime.fromisoformat(ticket["opened"])
-                    hastyped = await ticket_owner_hastyped(channel, member)
-                    if hastyped and channel_id not in self.valid:
-                        self.valid.append(channel_id)
-                        continue
-                    td = (now - opened_on).total_seconds() / 3600
-                    next_td = td + 0.33
-                    if td < inactive <= next_td:
-                        # Ticket hasn't expired yet but will in the next loop
-                        warning = _(
-                            "If you do not respond to this ticket "
-                            "within the next 20 minutes it will be closed automatically."
-                        )
-                        await channel.send(f"{member.mention}\n{warning}")
-                        continue
-                    elif td < inactive:
+                        log.debug(f"Channel with ID {channel_id} not found in guild {guild.name}. Skipping.")
                         continue
 
-                    time = "hours" if inactive != 1 else "hour"
+                    opened_on = ticket.get("opened")
+                    if not opened_on:
+                        log.error(f"Ticket in channel {channel.name} (ID: {channel_id}) is missing an 'opened' timestamp.")
+                        continue
+
                     try:
-                        await close_ticket(
-                            self.bot,
-                            member,
-                            guild,
-                            channel,
-                            conf,
-                            _("(Auto-Close) Opened ticket with no response for ") + f"{inactive} {time}",
-                            self.bot.user.name,
-                            self.config,
-                        )
-                        log.info(
-                            f"Ticket opened by {member.name} has been auto-closed.\n"
-                            f"Has typed: {hastyped}\n"
-                            f"Hours elapsed: {td}"
-                        )
+                        opened_dt = datetime.datetime.fromisoformat(opened_on).astimezone()
+                        now = datetime.datetime.now().astimezone()
+                        elapsed_hours = (now - opened_dt).total_seconds() / 3600
+
+                        # Check if the user has typed in the channel
+                        user_interacted = await ticket_owner_hastyped(channel, member)
+                        if user_interacted:
+                            log.debug(f"User {member.name} interacted in ticket channel {channel.name}. Skipping auto-close.")
+                            continue
+
+                        # Handle nearing timeout
+                        if elapsed_hours < inactive_timeout <= elapsed_hours + 0.33:
+                            warning = (
+                                f"{member.mention}
+"
+                                f"If you do not respond to this ticket within the next 20 minutes, "
+                                "it will be closed automatically."
+                            )
+                            await channel.send(warning)
+                            log.debug(f"Sent warning message to {member.name} in {channel.name}.")
+                            continue
+
+                        # Close the ticket if the timeout has elapsed
+                        if elapsed_hours >= inactive_timeout:
+                            await close_ticket(
+                                self.bot,
+                                member,
+                                guild,
+                                channel,
+                                guild_conf,
+                                reason=f"(Auto-Close) No response for {inactive_timeout} hour(s).",
+                                closed_by=self.bot.user.name,
+                                config=self.config,
+                            )
+                            log.info(f"Auto-closed ticket in {channel.name} for user {member.name} after {elapsed_hours:.2f} hours.")
                     except Exception as e:
-                        log.error(f"Failed to auto-close ticket for {member} in {guild.name}\nException: {e}")
+                        log.error(f"Error processing ticket in channel {channel_id}: {e}")
+    except Exception as e:
+        log.critical(f"Critical error in auto_close: {e}")
 
-        if tasks:
-            await asyncio.gather(*actasks)
-
-    @auto_close.before_loop
+    log.debug("Finished auto_close process.")
+@auto_close.before_loop
     async def before_auto_close(self):
         await self.bot.wait_until_red_ready()
         await asyncio.sleep(300)
